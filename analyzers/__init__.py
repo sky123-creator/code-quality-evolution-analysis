@@ -3,12 +3,16 @@
 """
 
 from .loc import calculate_loc
-from .comment import analyze_comments, calculate_comment_rate
+from .loc import calculate_loc
+from .comment import analyze_comments
+from .complexity import calculate_complexity
+from .structure import analyze_structure
+from .dependency import analyze_dependencies
 
 __all__ = [
     'calculate_loc',
     'analyze_comments', 
-    'calculate_comment_rate'
+    'calculate_complexity',
+    'analyze_structure',
+    'analyze_dependencies'
 ]
-
-__version__ = '0.1.0'
