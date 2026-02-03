@@ -1,25 +1,13 @@
 def calculate_loc(code):
-    """
-    统计代码行数信息
-    
-    参数:
-        code: 字符串形式的Python代码
-        
-    返回:
-        字典，包含:
-        - total_lines: 总行数
-        - code_lines: 代码行数（排除空行和纯注释）
-        - comment_lines: 纯注释行数（以#开头的行）
-        - blank_lines: 空行数
-        - comment_rate: 注释率（comment_lines/total_lines）
-    """
-    if not code or code.strip() == "":
+    """统计代码行数信息"""
+    if not code:
         return {
             'total_lines': 0,
             'code_lines': 0,
             'comment_lines': 0,
+            'inline_comment_lines': 0,
             'blank_lines': 0,
-            'comment_rate': 0.0
+            'comment_rate': 0
         }
     
     lines = code.split('\n')
@@ -27,56 +15,50 @@ def calculate_loc(code):
     
     code_lines = 0
     comment_lines = 0
+    inline_comment_lines = 0
     blank_lines = 0
     
     for line in lines:
-        stripped_line = line.strip()
+        line_stripped = line.strip()
         
-        if stripped_line == "":
+        if line_stripped == '':
             blank_lines += 1
-        elif stripped_line.startswith("#"):
+        elif line_stripped.startswith('#'):
             comment_lines += 1
+        elif '#' in line:
+            inline_comment_lines += 1
+            code_lines += 1
         else:
             code_lines += 1
     
-    comment_rate = comment_lines / total_lines if total_lines > 0 else 0.0
+    comment_rate = comment_lines / total_lines if total_lines > 0 else 0
     
     return {
         'total_lines': total_lines,
         'code_lines': code_lines,
         'comment_lines': comment_lines,
+        'inline_comment_lines': inline_comment_lines,
         'blank_lines': blank_lines,
-        'comment_rate': round(comment_rate, 4)
+        'comment_rate': round(comment_rate, 3)
     }
 
-
-# 测试代码
+# 测试
 if __name__ == "__main__":
-    # 测试用例1：简单代码
-    test_code1 = '''print("hello")
-# 这是一个注释
-x = 1 + 2
+    test_code = """print('hello')
+# 这是纯注释行
+x = 1 + 2  # 这是行内注释
 
-y = 3  # 行内注释'''
+y = 3
+z = 4  # 另一个行内注释"""
     
-    print("=== 测试用例1 ===")
-    result1 = calculate_loc(test_code1)
-    for key, value in result1.items():
+    result = calculate_loc(test_code)
+    print("=== 测试结果 ===")
+    for key, value in result.items():
         print(f"{key}: {value}")
     
-    # 测试用例2：空代码
-    print("\n=== 测试用例2（空代码）===")
-    result2 = calculate_loc("")
-    for key, value in result2.items():
-        print(f"{key}: {value}")
-    
-    # 测试用例3：只有注释
-    print("\n=== 测试用例3（只有注释）===")
-    test_code3 = '''# 注释1
-# 注释2
-# 注释3'''
-    result3 = calculate_loc(test_code3)
-    for key, value in result3.items():
-        print(f"{key}: {value}")
-    
-    print("\n=== 所有测试完成 ===")
+    print("\n=== 验证 ===")
+    print(f"总行数 {result['total_lines']} = "
+          f"代码{result['code_lines']} + "
+          f"纯注释{result['comment_lines']} + "
+          f"行内注释{result['inline_comment_lines']} + "
+          f"空行{result['blank_lines']}")
