@@ -2,14 +2,13 @@ from typing import Dict, List, Any
 from .file_walker import get_python_files, get_project_versions
 import os
 
-# ===================== 精准导入 A 同学的 3 个函数 =====================
+
 from analyzers.loc import calculate_loc                  # LOC + 注释率
 from analyzers.complexity import calculate_complexity    # 圈复杂度
 from analyzers.dependency import analyze_dependencies    # 依赖分析（注意函数名！）
-# =====================================================================
 
 def process_single_version(version_dir: str) -> Dict[str, Any]:
-    """处理单个版本：整合 A 同学所有指标，生成版本级汇总数据"""
+    """处理单个版本：整合所有指标，生成版本级汇总数据"""
     py_files = get_python_files(version_dir)
     if not py_files:
         return {
@@ -20,31 +19,31 @@ def process_single_version(version_dir: str) -> Dict[str, Any]:
             "avg_import_count": 0.0
         }
 
-    # 初始化汇总变量（与 A 同学返回指标对应）
+    # 初始化汇总变量（与返回指标对应）
     total_code_lines = 0
     total_comment_rate = 0.0
     total_complexity = 0.0
-    total_imports = 0          # 新增：版本总导入数（A同学 total_imports）
-    total_import_count = 0     # 新增：版本总 import 语句数（A同学 import_count）
+    total_imports = 0          
+    total_import_count = 0     
     valid_file_count = 0
 
     for file_path in py_files:
         try:
-            # 1. 读取文件内容（A 同学所有函数的统一入参）
+            # 1. 读取文件内容
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 file_content = f.read()
 
-            # 2. 调用 A 同学所有函数，获取字典结果
+            # 2. 调用所有函数，获取字典结果
             loc_dict = calculate_loc(file_content)
             complexity_dict = calculate_complexity(file_content)
             dep_dict = analyze_dependencies(file_content)
 
-            # 3. 从字典提取数值（严格匹配 A 同学的键名！）
+            # 3. 从字典提取数值
             code_lines = loc_dict.get('code_lines', 0)
             comment_rate = loc_dict.get('comment_rate', 0.0)
-            # 复杂度：若 A 同学返回键不是 cyclomatic_complexity，仅需修改此处
+            
             complexity = complexity_dict.get('cyclomatic_complexity', 0.0)
-            # 依赖：严格匹配 A 同学返回的 total_imports / import_count
+           
             imports = dep_dict.get('total_imports', 0)
             import_count = dep_dict.get('import_count', 0)
 
