@@ -2,8 +2,8 @@ from pipeline.batch_processor import process_all_projects
 from pipeline.csv_exporter import export_to_csv
 
 CONFIG = {
-    "project_root": "./data/use",
-    "output_csv": "./results/project_metrics.csv"
+    "project_root": "./data",
+    "output_csv": "./output/project_metrics.csv"
 }
 
 def main():
