@@ -104,5 +104,27 @@ python main.py --target ./large_project/ --workers 4 --output ./reports/large_re
 5.问题：自定义指标不生效
 解决方案：检查 config.yaml 中指标配置格式是否正确，需严格遵循 YAML 语法，且指标名称与核心模块定义一致。
 # 贡献指南
-
+欢迎开发者贡献代码、优化指标、新增功能，流程如下：
+Fork 本仓库；
+->
+创建特性分支（git checkout -b feature/xxx，如feature/add_cognitive_complexity）；
+->
+提交代码（提交信息规范：feat: 新增认知复杂度指标/fix: 修复Git历史版本分析bug/docs: 补充指标说明文档）；
+->
+新增 / 修改功能需补充单元测试（在tests/目录下），保证测试覆盖率≥80%；
+->
+推送分支（git push origin feature/xxx）；
+->
+提交 Pull Request，描述改动内容及测试结果。
+(代码规范)
+遵循 PEP 8 编码规范，使用black格式化代码；
+核心模块需添加类型注解（Type Hints）；
+新增指标需在docs/metrics.md中补充说明；
+单元测试使用pytest框架，执行pytest tests/确保所有用例通过。
 # 许可证
+本项目采用 MIT 许可证 开源 - 查看 LICENSE 文件了解详情，可自由商用、修改，需保留版权声明。
+# 致谢
+感谢 LibCST 团队提供的 Python 语法分析能力，相比原生 AST 更易实现代码修改追踪；
+感谢 astroid 库提供的静态分析能力，简化复杂度计算逻辑；
+感谢 GitPython 库，降低 Git 版本操作的开发成本；
+感谢 matplotlib/seaborn 社区，提供灵活的可视化能力。
