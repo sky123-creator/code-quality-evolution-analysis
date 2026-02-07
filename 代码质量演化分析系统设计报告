@@ -204,3 +204,472 @@ Key Words: Code Quality; Evolution Analysis; Static Analysis; Data Visualization
 - 版本信息表（version）与代码文件表（code_file）为一对多关系：一个版本包含多个代码文件，一个文件仅对应一个版本；
 - 代码文件表（code_file）与质量指标表（quality_metric）为一对多关系：一个文件包含多个质量指标，一个指标仅对应一个文件；
 - 仓库信息表（repository）、版本信息表（version）与告警信息表（alert）为多对一关系：一条告警信息关联一个仓库、一个版本。
+
+4. 系统实现
+4.1 开发环境与技术栈
+4.1.1 开发环境
+- 操作系统：Windows 10/11 / Ubuntu 20.04
+- 开发工具：PyCharm 2023、VS Code
+- 数据库工具：Navicat、SQLite Studio
+- 版本控制：Git + GitHub
+- 浏览器：Chrome 110+
+
+4.1.2 核心技术栈
+- 后端语言：Python 3.9+
+- Web 框架：Flask 2.0（轻量级 Web 框架，实现前后端交互）
+- 静态分析库：
+  - Radon（Python 代码圈复杂度、行数计算）；
+  - Pylint（Python 代码缺陷、规范检测）；
+  - jscpd（跨语言代码重复率检测）；
+  - Checkstyle（Java 代码规范检测，通过 subprocess 调用）。
+- 可视化库：
+  - 前端：ECharts 5.0（交互式图表）；
+  - 后端：Matplotlib（辅助生成静态图表）。
+- 数据库：SQLite（本地部署）/ MySQL（可选，分布式部署）
+- 其他工具：
+  - GitPython（简化 Git 命令调用）；
+  - cryptography（加密认证信息）；
+  - reportlab（PDF 报告导出）。
+
+4.2 核心模块实现
+4.2.1 仓库采集模块实现
+仓库采集模块基于 GitPython 实现，核心代码如下：
+
+```python
+import os
+import git
+from datetime import datetime
+from models import Repository, Version, db  # 自定义模型类
+
+class RepositoryCollector:
+    def __init__(self, repo_id):
+        self.repo_id = repo_id
+        self.repo_info = Repository.query.get(repo_id)
+        self.local_repo_path = f"./temp_repo/{repo_id}"  # 本地临时仓库路径
+        self.collect_progress = {}  # 采集进度记录
+
+    def auth_repo(self):
+        """仓库认证，克隆/拉取仓库"""
+        try:
+            # 若本地已存在仓库，拉取最新代码；否则克隆
+            if os.path.exists(self.local_repo_path):
+                repo = git.Repo(self.local_repo_path)
+                origin = repo.remotes.origin
+                origin.pull()
+            else:
+                # 处理私有仓库认证
+                repo_url = self.repo_info.repo_url
+                if self.repo_info.auth_type == "token":
+                    # 替换URL为带Token的格式（以GitHub为例）
+                    repo_url = repo_url.replace("https://", f"https://{self.repo_info.auth_info}@")
+                repo = git.Repo.clone_from(repo_url, self.local_repo_path)
+            return True
+        except Exception as e:
+            print(f"仓库认证失败：{e}")
+            return False
+
+    def traverse_versions(self, start_time=None, end_time=None):
+        """遍历指定时间区间的版本"""
+        try:
+            repo = git.Repo(self.local_repo_path)
+            # 按提交时间排序遍历提交记录
+            commits = list(repo.iter_commits(all=True, since=start_time, until=end_time))
+            total = len(commits)
+            for idx, commit in enumerate(commits):
+                # 记录采集进度
+                self.collect_progress = {"current": idx+1, "total": total, "commit_hash": commit.hexsha}
+                # 检查是否已采集过该版本
+                existing_version = Version.query.filter_by(
+                    repo_id=self.repo_id, commit_hash=commit.hexsha
+                ).first()
+                if existing_version:
+                    continue  # 增量采集，跳过已采集版本
+                # 切换至当前版本
+                repo.git.checkout(commit.hexsha, force=True)
+                # 保存版本信息到数据库
+                version = Version(
+                    repo_id=self.repo_id,
+                    commit_hash=commit.hexsha,
+                    commit_time=datetime.fromtimestamp(commit.committed_date),
+                    committer=commit.committer.name,
+                    commit_msg=commit.message,
+                    collect_status="completed"
+                )
+                db.session.add(version)
+                db.session.commit()
+                # 提取当前版本代码文件（简化版，仅记录文件路径）
+                self.extract_code_files(version.version_id, repo)
+            return True
+        except Exception as e:
+            # 记录断点，更新采集状态为中断
+            if self.collect_progress.get("commit_hash"):
+                version = Version.query.filter_by(
+                    repo_id=self.repo_id, commit_hash=self.collect_progress["commit_hash"]
+                ).first()
+                if version:
+                    version.collect_status = "interrupted"
+                    db.session.commit()
+            print(f"版本遍历失败：{e}")
+            return False
+
+    def extract_code_files(self, version_id, repo):
+        """提取当前版本的代码文件信息"""
+        # 遍历仓库文件，过滤无效文件
+        ignore_suffix = [".log", ".tmp", ".md", ".yml"]
+        for root, dirs, files in os.walk(self.local_repo_path):
+            for file in files:
+                file_path = os.path.join(root, file)
+                # 过滤临时文件、配置文件等非代码文件
+                if any(file_path.endswith(suffix) for suffix in ignore_suffix):
+                    continue
+                # 简化实现：仅记录文件路径、类型、大小等基础信息
+                file_type = os.path.splitext(file)[1]
+                file_size = os.path.getsize(file_path)
+                # 此处可扩展：读取文件内容并存储，或记录相对路径
+                code_file = CodeFile(
+                    version_id=version_id,
+                    file_path=file_path.replace(self.local_repo_path, ""),
+                    file_type=file_type,
+                    file_size=file_size,
+                    code_lines=0  # 后续分析模块填充
+                )
+                db.session.add(code_file)
+        db.session.commit()
+
+4.2.2 质量分析模块实现
+以 Python 代码圈复杂度、重复率计算为例，核心代码如下：
+
+import radon.complexity as cc
+import radon.raw as raw
+from jscpd import Jscpd
+from models import CodeFile, QualityMetric, db
+
+class QualityAnalyzer:
+    def __init__(self, version_id):
+        self.version_id = version_id
+        self.code_files = CodeFile.query.filter_by(version_id=version_id).all()
+
+    def calculate_complexity(self, file_path):
+        """计算圈复杂度"""
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                code = f.read()
+            # 计算圈复杂度
+            complexity_results = cc.cc_visit(code)
+            # 汇总文件级圈复杂度（取最大值）
+            max_complexity = max([res.complexity for res in complexity_results], default=0)
+            # 计算代码行数
+            raw_results = raw.analyze(code)
+            loc = raw_results.loc  # 总行数
+            sloc = raw_results.sloc  # 有效代码行数
+            return {
+                "cyclomatic_complexity": max_complexity,
+                "loc": loc,
+                "sloc": sloc
+            }
+        except Exception as e:
+            print(f"复杂度计算失败（{file_path}）：{e}")
+            return {"cyclomatic_complexity": 0, "loc": 0, "sloc": 0}
+
+    def calculate_duplication(self):
+        """计算代码重复率（版本级）"""
+        try:
+            # 收集当前版本所有代码文件路径
+            file_paths = [os.path.join("./temp_repo", cf.file_path.lstrip("/")) for cf in self.code_files]
+            # 初始化jscpd
+            jscpd = Jscpd(
+                paths=file_paths,
+                format=["python", "java"],  # 支持的语言
+                ignore=["venv", "node_modules"]
+            )
+            # 运行重复率检测
+            report = jscpd.run()
+            duplication_rate = report["statistics"]["total"]["duplicationRate"]  # 重复率（百分比）
+            return duplication_rate
+        except Exception as e:
+            print(f"重复率计算失败：{e}")
+            return 0.0
+
+    def analyze_all_metrics(self):
+        """分析当前版本所有文件的质量指标"""
+        # 计算版本级重复率
+        duplication_rate = self.calculate_duplication()
+        # 遍历文件计算指标
+        for code_file in self.code_files:
+            file_path = os.path.join("./temp_repo", code_file.file_path.lstrip("/"))
+            if not os.path.exists(file_path):
+                continue
+            # 计算圈复杂度、行数等指标
+            complexity_data = self.calculate_complexity(file_path)
+            # 存储圈复杂度指标
+            metric_cc = QualityMetric(
+                file_id=code_file.file_id,
+                metric_type="cyclomatic_complexity",
+                metric_value=complexity_data["cyclomatic_complexity"]
+            )
+            # 存储代码行数指标
+            metric_loc = QualityMetric(
+                file_id=code_file.file_id,
+                metric_type="loc",
+                metric_value=complexity_data["loc"]
+            )
+            # 存储重复率指标（版本级，关联首个文件，或单独建表）
+            metric_dup = QualityMetric(
+                file_id=code_file.file_id,
+                metric_type="duplication_rate",
+                metric_value=duplication_rate
+            )
+            db.session.add_all([metric_cc, metric_loc, metric_dup])
+        db.session.commit()
+        return True
+
+4.2.3 趋势可视化模块实现
+前端基于 ECharts 实现趋势折线图，核心代码（HTML/JS）如下：
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>代码质量演化趋势</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts/dist/echarts.min.js"></script>
+    <style>
+        #trend-chart {width: 100%; height: 600px;}
+    </style>
+</head>
+<body>
+    <div>
+        <label>选择指标类型：</label>
+        <select id="metric-type">
+            <option value="cyclomatic_complexity">圈复杂度</option>
+            <option value="duplication_rate">重复率</option>
+            <option value="loc">代码行数</option>
+        </select>
+        <button onclick="loadTrendData()">加载数据</button>
+    </div>
+    <div id="trend-chart"></div>
+
+    <script>
+        // 初始化图表
+        var myChart = echarts.init(document.getElementById('trend-chart'));
+        var repoId = {{ repo_id }};  // 后端传入的仓库ID
+
+        function loadTrendData() {
+            // 获取选中的指标类型
+            var metricType = document.getElementById('metric-type').value;
+            // 调用后端接口获取趋势数据
+            fetch(`/api/trend/${repoId}?metric_type=${metricType}`)
+                .then(response => response.json())
+                .then(data => {
+                    // 构造图表配置项
+                    var option = {
+                        title: {text: `${data.metric_name}演化趋势`},
+                        tooltip: {trigger: 'axis'},
+                        legend: {data: ['平均值']},
+                        xAxis: {
+                            type: 'category',
+                            data: data.x_axis,  // 版本/时间轴
+                            axisLabel: {rotate: 45}
+                        },
+                        yAxis: {type: 'value'},
+                        series: [{
+                            name: '平均值',
+                            type: 'line',
+                            data: data.y_axis,  // 指标值
+                            markPoint: {  // 标记最大值/最小值
+                                data: [
+                                    {type: 'max', name: '最大值'},
+                                    {type: 'min', name: '最小值'}
+                                ]
+                            },
+                            markLine: {  // 标记平均线
+                                data: [{type: 'average', name: '平均线'}]
+                            }
+                        }]
+                    };
+                    // 渲染图表
+                    myChart.setOption(option);
+                })
+                .catch(error => console.error('加载数据失败：', error));
+        }
+
+        // 初始加载数据
+        loadTrendData();
+    </script>
+</body>
+</html>
+
+后端接口（Flask）实现：
+
+from flask import Flask, jsonify
+from models import Repository, Version, QualityMetric, CodeFile
+
+app = Flask(__name__)
+
+@app.route('/api/trend/<int:repo_id>', methods=['GET'])
+def get_trend_data(repo_id):
+    metric_type = request.args.get('metric_type')
+    # 获取仓库的所有版本（按提交时间排序）
+    versions = Version.query.filter_by(repo_id=repo_id).order_by(Version.commit_time).all()
+    x_axis = [v.commit_hash[:8] for v in versions]  # 取前8位哈希作为X轴标签
+    y_axis = []
+
+    # 计算每个版本的指标平均值
+    for version in versions:
+        # 获取版本下所有文件
+        file_ids = [cf.file_id for cf in CodeFile.query.filter_by(version_id=version.version_id).all()]
+        if not file_ids:
+            y_axis.append(0)
+            continue
+        # 查询指标值并计算平均值
+        metrics = QualityMetric.query.filter(
+            QualityMetric.file_id.in_(file_ids),
+            QualityMetric.metric_type == metric_type
+        ).all()
+        if not metrics:
+            y_axis.append(0)
+            continue
+        avg_value = sum([m.metric_value for m in metrics]) / len(metrics)
+        y_axis.append(round(avg_value, 2))
+
+    # 构造返回数据
+    metric_name_map = {
+        "cyclomatic_complexity": "圈复杂度",
+        "duplication_rate": "重复率",
+        "loc": "代码行数"
+    }
+    return jsonify({
+        "metric_name": metric_name_map.get(metric_type, "未知指标"),
+        "x_axis": x_axis,
+        "y_axis": y_axis
+    })
+
+4.2.4 告警模块实现
+告警规则检测核心代码如下：
+
+from models import Version, QualityMetric, CodeFile, Alert, db
+from datetime import datetime
+
+class AlertDetector:
+    def __init__(self, repo_id):
+        self.repo_id = repo_id
+        # 预设告警规则（可从数据库读取用户自定义规则）
+        self.alert_rules = {
+            "cyclomatic_complexity": {"threshold": 10, "type": "single", "delta": 5},
+            # 圈复杂度：单次增长超5或值超10触发告警
+            "duplication_rate": {"threshold": 10.0, "type": "continuous", "count": 3}
+            # 重复率：连续3个版本上升或值超10%触发告警
+        }
+
+    def detect_single_version(self, version_id):
+        """检测单个版本的指标是否触发告警（单次突变/阈值）"""
+        # 获取版本下所有指标
+        file_ids = [cf.file_id for cf in CodeFile.query.filter_by(version_id=version_id).all()]
+        for metric_type, rule in self.alert_rules.items():
+            if rule["type"] != "single":
+                continue
+            # 查询当前版本指标
+            metrics = QualityMetric.query.filter(
+                QualityMetric.file_id.in_(file_ids),
+                QualityMetric.metric_type == metric_type
+            ).all()
+            # 获取上一版本指标（用于计算变化量）
+            prev_version = Version.query.filter(
+                Version.repo_id == self.repo_id,
+                Version.commit_time < Version.query.get(version_id).commit_time
+            ).order_by(Version.commit_time.desc()).first()
+            if not prev_version:
+                # 无历史版本，仅检测阈值
+                for m in metrics:
+                    if m.metric_value > rule["threshold"]:
+                        self.create_alert(version_id, metric_type, m)
+                continue
+            # 计算与上一版本的变化量
+            prev_file_ids = [cf.file_id for cf in CodeFile.query.filter_by(version_id=prev_version.version_id).all()]
+            prev_metrics = QualityMetric.query.filter(
+                QualityMetric.file_id.in_(prev_file_ids),
+                QualityMetric.metric_type == metric_type
+            ).all()
+            # 按文件路径匹配，计算变化量（简化版：取平均值）
+            curr_avg = sum([m.metric_value for m in metrics]) / len(metrics) if metrics else 0
+            prev_avg = sum([m.metric_value for m in prev_metrics]) / len(prev_metrics) if prev_metrics else 0
+            delta = curr_avg - prev_avg
+            if delta > rule["delta"] or curr_avg > rule["threshold"]:
+                # 触发告警
+                self.create_alert(version_id, metric_type, None, delta=delta)
+
+    def detect_continuous_change(self):
+        """检测连续版本的指标变化（连续上升/下降）"""
+        versions = Version.query.filter_by(repo_id=self.repo_id).order_by(Version.commit_time).all()
+        for metric_type, rule in self.alert_rules.items():
+            if rule["type"] != "continuous":
+                continue
+            # 提取版本序列的指标平均值
+            metric_values = []
+            version_ids = []
+            for v in versions:
+                file_ids = [cf.file_id for cf in CodeFile.query.filter_by(version_id=v.version_id).all()]
+                metrics = QualityMetric.query.filter(
+                    QualityMetric.file_id.in_(file_ids),
+                    QualityMetric.metric_type == metric_type
+                ).all()
+                avg_val = sum([m.metric_value for m in metrics]) / len(metrics) if metrics else 0
+                metric_values.append(avg_val)
+                version_ids.append(v.version_id)
+            # 检测连续上升
+            continuous_rise = 0
+            for i in range(1, len(metric_values)):
+                if metric_values[i] > metric_values[i-1]:
+                    continuous_rise += 1
+                    if continuous_rise >= rule["count"]:
+                        # 触发告警
+                        self.create_alert(version_ids[i], metric_type, None, continuous_count=continuous_rise)
+                else:
+                    continuous_rise = 0
+
+    def create_alert(self, version_id, metric_type, metric=None, delta=None, continuous_count=None):
+        """创建告警记录"""
+        version = Version.query.get(version_id)
+        # 构造告警信息
+        if delta:
+            alert_msg = f"指标{metric_type}单次增长{delta:.2f}，超过阈值{self.alert_rules[metric_type]['delta']}"
+        elif continuous_count:
+            alert_msg = f"指标{metric_type}连续{continuous_count}个版本上升，触发告警"
+        else:
+            alert_msg = f"文件{metric.file_id}的{metric_type}值{metric.metric_value}超过阈值{self.alert_rules[metric_type]['threshold']}"
+        # 检查是否已存在相同告警
+        existing_alert = Alert.query.filter_by(
+            repo_id=self.repo_id,
+            version_id=version_id,
+            metric_type=metric_type,
+            alert_msg=alert_msg
+        ).first()
+        if existing_alert:
+            return
+        # 创建告警
+        alert = Alert(
+            repo_id=self.repo_id,
+            version_id=version_id,
+            metric_type=metric_type,
+            alert_rule=str(self.alert_rules[metric_type]),
+            alert_msg=alert_msg,
+            alert_time=datetime.now(),
+            handle_status="unhandled"
+        )
+        db.session.add(alert)
+        db.session.commit()
+        # 此处可扩展：发送邮件通知
+        self.send_alert_notification(alert)
+
+    def send_alert_notification(self, alert):
+        """发送告警通知（简化版：打印日志，可扩展为邮件）"""
+        print(f"【告警】{alert.alert_time} - {alert.alert_msg}")
+
+4.3 系统界面实现
+
+系统主界面采用 Flask + HTML/CSS/JS 实现，核心界面包括：
+
+1.仓库管理界面：支持添加 / 编辑 / 删除仓库信息，输入仓库地址、认证信息，触发采集操作；
+2.质量分析界面：选择版本区间、指标类型，触发分析操作，展示分析进度；
+3.趋势可视化界面：以图表形式展示质量指标演化趋势，支持交互筛选、报告导出；
+4.告警中心界面：展示实时 / 历史告警信息，支持筛选、标记处理状态。
+5.界面设计遵循简约易用原则，核心交互流程为：添加仓库 → 采集版本数据 → 分析质量指标 → 查看演化趋势 → 处理质量告警。
